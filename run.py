@@ -148,12 +148,14 @@ def main() -> None:
         ckpt_name = train_cfg.get("checkpoint_name", "sparrow_model.pt")
         precision = hw_cfg.get("precision", "bfloat16")
 
+        train_seq_len = int(train_cfg.get("seq_len", config.max_seq_len // 2))
+
         if args.train_file:
-            renderer.print_system_message(f"Ingesting training data from {args.train_file}...")
-            dataset = TextChunkDataset(args.train_file, seq_len=config.max_seq_len // 2, tokenizer=tokenizer)
+            renderer.print_system_message(f"Ingesting training data from {args.train_file} (seq_len={train_seq_len})...")
+            dataset = TextChunkDataset(args.train_file, seq_len=train_seq_len, tokenizer=tokenizer)
         else:
             renderer.print_system_message("No train file specified; using synthetic dataset for demonstration...")
-            dataset = SyntheticDemoDataset(vocab_size=config.vocab_size, seq_len=512, size=200)
+            dataset = SyntheticDemoDataset(vocab_size=config.vocab_size, seq_len=train_seq_len, size=200)
 
         dataloader = torch.utils.data.DataLoader(
             dataset,

@@ -28,7 +28,8 @@ hardware:
 
 training:
   batch_size: 4              # Per-device micro-batch size fitting into 8GB VRAM
-  gradient_accumulation_steps: 8  # Effective batch size = 32
+  seq_len: 1024              # Sequence length (context window) per training sample
+  gradient_accumulation_steps: 8  # Effective batch size = 32 micro-batches
   learning_rate: 3.0e-4
   min_learning_rate: 3.0e-5
   weight_decay: 0.1
@@ -38,7 +39,7 @@ training:
   warmup_steps: 200
   max_steps: 15000
   eval_interval: 250
-  save_interval: 5000
+  save_interval: 1000
   checkpoint_dir: "checkpoints"
   checkpoint_name: "sparrow_model.pt"
 
