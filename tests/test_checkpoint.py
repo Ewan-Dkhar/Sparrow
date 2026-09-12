@@ -16,8 +16,7 @@ from src.data.dataset import SyntheticDemoDataset
 
 
 class TestCheckpoint(unittest.TestCase):
-    def test_checkpoint_weights_only_save_and_load(self):
-        """Verify that newly saved checkpoints can be deserialized with weights_only=True."""
+    def _create_dummy_setup(self):
         config = SparrowConfig(
             vocab_size=1000,
             d_model=64,
@@ -31,8 +30,13 @@ class TestCheckpoint(unittest.TestCase):
             max_seq_len=64,
         )
         model = SparrowMoE(config)
-        dataset = SyntheticDemoDataset(vocab_size=1000, seq_len=32, size=4)
+        dataset = SyntheticDemoDataset(vocab_size=1000, seq_len=32, size=8)
         loader = torch.utils.data.DataLoader(dataset, batch_size=2)
+        return config, model, loader
+
+    def test_checkpoint_weights_only_save_and_load(self):
+        """Verify that newly saved checkpoints save to single file and can be deserialized with weights_only=True."""
+        _, model, loader = self._create_dummy_setup()
 
         with tempfile.TemporaryDirectory() as tmpdir:
             trainer = SparrowTrainer(
@@ -40,23 +44,76 @@ class TestCheckpoint(unittest.TestCase):
                 dataloader=loader,
                 max_steps=1,
                 checkpoint_dir=tmpdir,
+                checkpoint_name="sparrow_model.pt",
                 device="cpu",
             )
             trainer.save_checkpoint(step=1)
 
-            ckpt_file = Path(tmpdir) / "sparrow_step_1.pt"
-            self.assertTrue(ckpt_file.is_file(), "Checkpoint file was not created")
+            ckpt_file = Path(tmpdir) / "sparrow_model.pt"
+            self.assertTrue(ckpt_file.is_file(), "Single checkpoint file was not created")
+
+            # Verify only one file exists in the directory
+            files = list(Path(tmpdir).glob("*.pt"))
+            self.assertEqual(len(files), 1, f"Expected exactly 1 checkpoint file, found {files}")
 
             # Verify weights_only=True loads cleanly
             data = torch.load(ckpt_file, map_location="cpu", weights_only=True)
             self.assertIn("model_state_dict", data)
             self.assertIn("config", data)
             self.assertIsInstance(data["config"], dict)
+            self.assertEqual(data["step"], 1)
 
             # Verify model can reload weights
             loaded_config = SparrowConfig.from_dict(data["config"])
             new_model = SparrowMoE(loaded_config)
             new_model.load_state_dict(data["model_state_dict"])
+
+    def test_checkpoint_atomic_overwrite_single_file(self):
+        """Verify that multiple saves update the single file without creating extra files."""
+        _, model, loader = self._create_dummy_setup()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            trainer = SparrowTrainer(
+                model=model,
+                dataloader=loader,
+                checkpoint_dir=tmpdir,
+                checkpoint_name="sparrow_custom.pt",
+                device="cpu",
+            )
+            trainer.save_checkpoint(step=100)
+            data1 = torch.load(Path(tmpdir) / "sparrow_custom.pt", map_location="cpu", weights_only=True)
+            self.assertEqual(data1["step"], 100)
+
+            trainer.save_checkpoint(step=200)
+            data2 = torch.load(Path(tmpdir) / "sparrow_custom.pt", map_location="cpu", weights_only=True)
+            self.assertEqual(data2["step"], 200)
+
+            # Confirm still only 1 file
+            files = list(Path(tmpdir).glob("*.pt"))
+            self.assertEqual(len(files), 1)
+            self.assertEqual(files[0].name, "sparrow_custom.pt")
+
+    def test_save_interval_in_training(self):
+        """Verify that trainer respects save_interval during training."""
+        _, model, loader = self._create_dummy_setup()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            trainer = SparrowTrainer(
+                model=model,
+                dataloader=loader,
+                max_steps=2,
+                save_interval=2,
+                grad_accum_steps=1,
+                checkpoint_dir=tmpdir,
+                checkpoint_name="interval_model.pt",
+                device="cpu",
+            )
+            trainer.train()
+
+            ckpt_file = Path(tmpdir) / "interval_model.pt"
+            self.assertTrue(ckpt_file.is_file(), "Checkpoint file was not created at save_interval")
+            data = torch.load(ckpt_file, map_location="cpu", weights_only=True)
+            self.assertEqual(data["step"], 2)
 
     def test_checkpoint_nonexistent_file_raises_error(self):
         """Verify that a non-existent checkpoint path raises FileNotFoundError."""

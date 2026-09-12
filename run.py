@@ -143,7 +143,9 @@ def main() -> None:
         min_lr = float(train_cfg.get("min_learning_rate", 3.0e-5))
         max_steps = int(args.steps or train_cfg.get("max_steps", 5000))
         warmup_steps = int(train_cfg.get("warmup_steps", 200))
+        save_interval = int(train_cfg.get("save_interval", 1000))
         ckpt_dir = train_cfg.get("checkpoint_dir", "checkpoints")
+        ckpt_name = train_cfg.get("checkpoint_name", "sparrow_model.pt")
         precision = hw_cfg.get("precision", "bfloat16")
 
         if args.train_file:
@@ -169,9 +171,11 @@ def main() -> None:
             max_steps=max_steps,
             warmup_steps=warmup_steps,
             grad_accum_steps=grad_accum,
+            save_interval=save_interval,
+            checkpoint_dir=ckpt_dir,
+            checkpoint_name=ckpt_name,
             precision=precision,
             device=str(device),
-            checkpoint_dir=ckpt_dir,
             console=renderer.console,
         )
         trainer.train()

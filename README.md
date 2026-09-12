@@ -166,10 +166,10 @@ uv run python run.py --mode train --train-file data/tinystories_train.bin --step
 * **Tokens per Step**: 32,768 ($4 \text{ batch} \times 8 \text{ accum} \times 1024 \text{ context}$)
 
 ### 3. Chat with Your Trained Checkpoint
-Checkpoints are automatically saved to `checkpoints/` (e.g. `sparrow_step_1000.pt`, `sparrow_step_5000.pt`). Test generation at any time:
+Checkpoints are automatically saved to `checkpoints/` as a single file (`sparrow_model.pt`) at the configured `save_interval`. Test generation at any time:
 
 ```bash
-uv run python run.py --mode chat --checkpoint checkpoints/sparrow_step_5000.pt
+uv run python run.py --mode chat --checkpoint checkpoints/sparrow_model.pt
 ```
 
 ---

@@ -41,9 +41,11 @@ class SparrowTrainer:
         max_steps: int = 5000,
         grad_accum_steps: int = 8,
         grad_clip: float = 1.0,
+        save_interval: int = 1000,
+        checkpoint_dir: str = "checkpoints",
+        checkpoint_name: str = "sparrow_model.pt",
         precision: str = "bfloat16",
         device: str = "cuda",
-        checkpoint_dir: str = "checkpoints",
         console: Optional[Console] = None,
     ):
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
@@ -55,8 +57,10 @@ class SparrowTrainer:
         self.max_steps = max_steps
         self.grad_accum_steps = grad_accum_steps
         self.grad_clip = grad_clip
+        self.save_interval = save_interval
         self.checkpoint_dir = Path(checkpoint_dir)
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        self.checkpoint_name = checkpoint_name
         self.console = console or Console()
 
         # Mixed precision setup
@@ -193,8 +197,11 @@ class SparrowTrainer:
                     vram=vram_str,
                 )
 
-                if step % 500 == 0:
+                if step % self.save_interval == 0:
                     self.save_checkpoint(step)
+
+        if step > 0 and step % self.save_interval != 0:
+            self.save_checkpoint(step)
 
         elapsed = time.time() - start_time
         self.console.print(
@@ -203,8 +210,9 @@ class SparrowTrainer:
         )
 
     def save_checkpoint(self, step: int) -> None:
-        """Saves model weights and configuration."""
-        ckpt_path = self.checkpoint_dir / f"sparrow_step_{step}.pt"
+        """Saves model weights and configuration atomically to a single file."""
+        ckpt_path = self.checkpoint_dir / self.checkpoint_name
+        temp_path = self.checkpoint_dir / f"{self.checkpoint_name}.tmp"
         config_data = (
             dataclasses.asdict(self.model.config)
             if dataclasses.is_dataclass(self.model.config)
@@ -217,5 +225,6 @@ class SparrowTrainer:
                 "config": config_data,
                 "optimizer_state_dict": self.optimizer.state_dict(),
             },
-            ckpt_path,
+            temp_path,
         )
+        temp_path.replace(ckpt_path)
