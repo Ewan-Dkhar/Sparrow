@@ -10,7 +10,10 @@ wheels/
 .venv
 
 # Checkpoints
-checkpoints/    
+/checkpoints/
 
 # Logs
-runs/
+/runs/
+
+# Data
+/data/

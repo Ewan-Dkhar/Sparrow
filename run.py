@@ -25,6 +25,10 @@ from src.engine.generator import SparrowGenerator
 from src.engine.trainer import SparrowTrainer
 from src.model.sparrow_moe import SparrowConfig, SparrowMoE
 
+# Register custom config class as safe global for PyTorch 2.6+ weights_only loading
+if hasattr(torch.serialization, "add_safe_globals"):
+    torch.serialization.add_safe_globals([SparrowConfig])
+
 
 def load_config(config_path: str | Path) -> SparrowConfig:
     """Loads configuration from YAML file or defaults."""
@@ -70,10 +74,37 @@ def main() -> None:
         default=None,
         help="Text file path for training (if None, synthetic data is used for demo)",
     )
+    parser.add_argument(
+        "--steps",
+        type=int,
+        default=None,
+        help="Override total training steps (e.g., 500)",
+    )
 
     args = parser.parse_args()
     config = load_config(args.config)
     renderer = TerminalRenderer()
+
+    # Load and validate checkpoint if specified
+    ckpt = None
+    if args.checkpoint:
+        ckpt_path = Path(args.checkpoint)
+        if not ckpt_path.is_file():
+            raise FileNotFoundError(f"Checkpoint file not found: '{args.checkpoint}'")
+
+        renderer.print_system_message(f"Loading checkpoint from {args.checkpoint}...")
+        try:
+            ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+        except Exception:
+            # Fallback for legacy checkpoints with custom unallowlisted objects
+            ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+
+        if "config" in ckpt:
+            loaded_cfg = ckpt["config"]
+            if isinstance(loaded_cfg, dict):
+                config = SparrowConfig.from_dict(loaded_cfg)
+            elif isinstance(loaded_cfg, SparrowConfig):
+                config = loaded_cfg
 
     if args.mode == "info":
         renderer.print_banner(config)
@@ -84,12 +115,9 @@ def main() -> None:
         )
         return
 
-    # Initialize model
+    # Initialize model with resolved configuration and weights
     model = SparrowMoE(config)
-
-    if args.checkpoint and Path(args.checkpoint).is_file():
-        renderer.print_system_message(f"Loading checkpoint from {args.checkpoint}...")
-        ckpt = torch.load(args.checkpoint, map_location="cpu")
+    if ckpt is not None:
         model.load_state_dict(ckpt["model_state_dict"])
 
     # Target dtype (bfloat16 for RTX 4060)
@@ -101,6 +129,23 @@ def main() -> None:
         renderer.print_banner(config)
         tokenizer = SparrowTokenizer()
 
+        # Load training options from config
+        raw_cfg = {}
+        if Path(args.config).is_file():
+            with open(args.config, "r", encoding="utf-8") as f:
+                raw_cfg = yaml.safe_load(f) or {}
+        train_cfg = raw_cfg.get("training", {})
+        hw_cfg = raw_cfg.get("hardware", {})
+
+        batch_size = int(train_cfg.get("batch_size", 4))
+        grad_accum = int(train_cfg.get("gradient_accumulation_steps", 8))
+        lr = float(train_cfg.get("learning_rate", 3.0e-4))
+        min_lr = float(train_cfg.get("min_learning_rate", 3.0e-5))
+        max_steps = int(args.steps or train_cfg.get("max_steps", 5000))
+        warmup_steps = int(train_cfg.get("warmup_steps", 200))
+        ckpt_dir = train_cfg.get("checkpoint_dir", "checkpoints")
+        precision = hw_cfg.get("precision", "bfloat16")
+
         if args.train_file:
             renderer.print_system_message(f"Ingesting training data from {args.train_file}...")
             dataset = TextChunkDataset(args.train_file, seq_len=config.max_seq_len // 2, tokenizer=tokenizer)
@@ -110,7 +155,7 @@ def main() -> None:
 
         dataloader = torch.utils.data.DataLoader(
             dataset,
-            batch_size=4,
+            batch_size=batch_size,
             shuffle=True,
             num_workers=0,
             pin_memory=(device.type == "cuda"),
@@ -119,7 +164,14 @@ def main() -> None:
         trainer = SparrowTrainer(
             model=model,
             dataloader=dataloader,
+            lr=lr,
+            min_lr=min_lr,
+            max_steps=max_steps,
+            warmup_steps=warmup_steps,
+            grad_accum_steps=grad_accum,
+            precision=precision,
             device=str(device),
+            checkpoint_dir=ckpt_dir,
             console=renderer.console,
         )
         trainer.train()

@@ -4,6 +4,7 @@ Optimized for 8GB VRAM (RTX 4060) utilizing bfloat16 / float16 AMP, gradient acc
 gradient clipping, and auxiliary load-balancing loss tracking.
 """
 
+import dataclasses
 import math
 import os
 import time
@@ -114,6 +115,7 @@ class SparrowTrainer:
             TimeRemainingColumn(),
             TextColumn("[green]loss: {task.fields[loss]:.4f}"),
             TextColumn("[magenta]aux: {task.fields[aux]:.4f}"),
+            TextColumn("[cyan]lr: {task.fields[lr]:.1e}"),
             TextColumn("[yellow]vram: {task.fields[vram]}"),
             console=self.console,
         )
@@ -124,6 +126,7 @@ class SparrowTrainer:
                 total=self.max_steps,
                 loss=0.0,
                 aux=0.0,
+                lr=0.0,
                 vram="0MB",
             )
 
@@ -186,6 +189,7 @@ class SparrowTrainer:
                     advance=1,
                     loss=running_loss,
                     aux=running_aux_loss,
+                    lr=curr_lr,
                     vram=vram_str,
                 )
 
@@ -201,11 +205,16 @@ class SparrowTrainer:
     def save_checkpoint(self, step: int) -> None:
         """Saves model weights and configuration."""
         ckpt_path = self.checkpoint_dir / f"sparrow_step_{step}.pt"
+        config_data = (
+            dataclasses.asdict(self.model.config)
+            if dataclasses.is_dataclass(self.model.config)
+            else self.model.config
+        )
         torch.save(
             {
                 "step": step,
                 "model_state_dict": self.model.state_dict(),
-                "config": self.model.config,
+                "config": config_data,
                 "optimizer_state_dict": self.optimizer.state_dict(),
             },
             ckpt_path,

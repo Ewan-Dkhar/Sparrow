@@ -5,6 +5,7 @@ Tokenizes raw text into fixed-length autoregressive chunks (x, y) where y is shi
 
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
+import numpy as np
 import torch
 from torch.utils.data import Dataset
 
@@ -39,14 +40,24 @@ class TextChunkDataset(Dataset):
         elif isinstance(data, (str, Path)):
             path = Path(data)
             if path.is_file():
-                text = path.read_text(encoding="utf-8")
+                if path.suffix == ".bin":
+                    # Zero-overhead memory-mapped binary file for massive datasets
+                    self.tokens = np.memmap(path, dtype=np.int32, mode="r")
+                elif path.suffix == ".pt":
+                    loaded = torch.load(path, weights_only=True)
+                    self.tokens = loaded.long() if isinstance(loaded, torch.Tensor) else torch.tensor(loaded, dtype=torch.long)
+                else:
+                    text = path.read_text(encoding="utf-8")
+                    if tokenizer is None:
+                        tokenizer = SparrowTokenizer()
+                    token_ids = tokenizer.encode(text)
+                    self.tokens = torch.tensor(token_ids, dtype=torch.long)
             else:
                 text = str(data)
-
-            if tokenizer is None:
-                tokenizer = SparrowTokenizer()
-            token_ids = tokenizer.encode(text)
-            self.tokens = torch.tensor(token_ids, dtype=torch.long)
+                if tokenizer is None:
+                    tokenizer = SparrowTokenizer()
+                token_ids = tokenizer.encode(text)
+                self.tokens = torch.tensor(token_ids, dtype=torch.long)
         else:
             raise ValueError(f"Unsupported data type: {type(data)}")
 
@@ -54,7 +65,10 @@ class TextChunkDataset(Dataset):
         if len(self.tokens) < self.seq_len + 1:
             # Pad or repeat to satisfy minimum sequence length
             repeat_count = (self.seq_len + 2) // len(self.tokens) + 1
-            self.tokens = self.tokens.repeat(repeat_count)
+            if isinstance(self.tokens, torch.Tensor):
+                self.tokens = self.tokens.repeat(repeat_count)
+            else:
+                self.tokens = np.tile(self.tokens, repeat_count)
 
     def __len__(self) -> int:
         return (len(self.tokens) - 1) // self.seq_len
@@ -63,6 +77,13 @@ class TextChunkDataset(Dataset):
         start_idx = idx * self.seq_len
         end_idx = start_idx + self.seq_len + 1
         chunk = self.tokens[start_idx:end_idx]
+
+        if isinstance(chunk, np.ndarray):
+            chunk = torch.from_numpy(chunk.astype(np.int64))
+        elif not isinstance(chunk, torch.Tensor):
+            chunk = torch.tensor(chunk, dtype=torch.long)
+        else:
+            chunk = chunk.long()
 
         input_ids = chunk[:-1]
         targets = chunk[1:]
