@@ -39,6 +39,8 @@ training:
   warmup_steps: 200
   max_steps: 15000
   eval_interval: 250
+  eval_steps: 25             # Batches evaluated per validation pass
+  val_file: "data/tinystories_valid.pt"
   save_interval: 1000
   checkpoint_dir: "checkpoints"
   checkpoint_name: "sparrow_model.pt"
@@ -48,7 +50,7 @@ generation:
   temperature: 0.7
   top_k: 50
   top_p: 0.9
-  repetition_penalty: 1.1
+  repetition_penalty: 1.3
 
 cli:
   system_prompt: "You are Sparrow, a lightweight, modern sparse Mixture of Experts (MoE) assistant running locally on an RTX 4060."

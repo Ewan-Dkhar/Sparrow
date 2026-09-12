@@ -75,6 +75,12 @@ def main() -> None:
         help="Text file path for training (if None, synthetic data is used for demo)",
     )
     parser.add_argument(
+        "--val-file",
+        type=str,
+        default=None,
+        help="Validation file path (.pt or text) for loss evaluation and overfitting tracking",
+    )
+    parser.add_argument(
         "--steps",
         type=int,
         default=None,
@@ -143,6 +149,8 @@ def main() -> None:
         min_lr = float(train_cfg.get("min_learning_rate", 3.0e-5))
         max_steps = int(args.steps or train_cfg.get("max_steps", 5000))
         warmup_steps = int(train_cfg.get("warmup_steps", 200))
+        eval_interval = int(train_cfg.get("eval_interval", 250))
+        eval_steps = int(train_cfg.get("eval_steps", 25))
         save_interval = int(train_cfg.get("save_interval", 1000))
         ckpt_dir = train_cfg.get("checkpoint_dir", "checkpoints")
         ckpt_name = train_cfg.get("checkpoint_name", "sparrow_model.pt")
@@ -165,14 +173,33 @@ def main() -> None:
             pin_memory=(device.type == "cuda"),
         )
 
+        val_file_path = args.val_file or train_cfg.get("val_file")
+        if not val_file_path and Path("data/tinystories_valid.pt").is_file():
+            val_file_path = "data/tinystories_valid.pt"
+
+        val_dataloader = None
+        if val_file_path and Path(val_file_path).is_file():
+            renderer.print_system_message(f"Ingesting validation data from {val_file_path}...")
+            val_dataset = TextChunkDataset(val_file_path, seq_len=train_seq_len, tokenizer=tokenizer)
+            val_dataloader = torch.utils.data.DataLoader(
+                val_dataset,
+                batch_size=batch_size,
+                shuffle=False,
+                num_workers=0,
+                pin_memory=(device.type == "cuda"),
+            )
+
         trainer = SparrowTrainer(
             model=model,
             dataloader=dataloader,
+            val_dataloader=val_dataloader,
             lr=lr,
             min_lr=min_lr,
             max_steps=max_steps,
             warmup_steps=warmup_steps,
             grad_accum_steps=grad_accum,
+            eval_interval=eval_interval,
+            eval_steps=eval_steps,
             save_interval=save_interval,
             checkpoint_dir=ckpt_dir,
             checkpoint_name=ckpt_name,

@@ -115,6 +115,41 @@ class TestCheckpoint(unittest.TestCase):
             data = torch.load(ckpt_file, map_location="cpu", weights_only=True)
             self.assertEqual(data["step"], 2)
 
+    def test_evaluation_loop_computes_val_loss(self):
+        """Verify that evaluate() runs without gradients and returns valid losses."""
+        _, model, loader = self._create_dummy_setup()
+        trainer = SparrowTrainer(
+            model=model,
+            dataloader=loader,
+            val_dataloader=loader,
+            eval_steps=2,
+            device="cpu",
+        )
+        val_loss, val_aux = trainer.evaluate()
+        self.assertIsInstance(val_loss, float)
+        self.assertIsInstance(val_aux, float)
+        self.assertGreater(val_loss, 0.0)
+        self.assertGreaterEqual(val_aux, 0.0)
+        self.assertTrue(trainer.model.training, "Model should be returned to training mode after evaluate()")
+
+    def test_validation_in_training_loop(self):
+        """Verify that training loop executes validation at eval_interval."""
+        _, model, loader = self._create_dummy_setup()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            trainer = SparrowTrainer(
+                model=model,
+                dataloader=loader,
+                val_dataloader=loader,
+                max_steps=2,
+                eval_interval=1,
+                eval_steps=1,
+                grad_accum_steps=1,
+                checkpoint_dir=tmpdir,
+                device="cpu",
+            )
+            trainer.train()
+            self.assertNotEqual(trainer.best_val_loss, float("inf"), "best_val_loss should be updated")
+
     def test_checkpoint_nonexistent_file_raises_error(self):
         """Verify that a non-existent checkpoint path raises FileNotFoundError."""
         nonexistent = "nonexistent_checkpoint_file_12345.pt"

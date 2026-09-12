@@ -9,7 +9,7 @@ import math
 import os
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -41,22 +41,29 @@ class SparrowTrainer:
         max_steps: int = 5000,
         grad_accum_steps: int = 8,
         grad_clip: float = 1.0,
+        eval_interval: int = 250,
+        eval_steps: int = 25,
         save_interval: int = 1000,
         checkpoint_dir: str = "checkpoints",
         checkpoint_name: str = "sparrow_model.pt",
         precision: str = "bfloat16",
         device: str = "cuda",
+        val_dataloader: Optional[DataLoader] = None,
         console: Optional[Console] = None,
     ):
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
         self.model = model.to(self.device)
         self.dataloader = dataloader
+        self.val_dataloader = val_dataloader
         self.lr = lr
         self.min_lr = min_lr
         self.warmup_steps = warmup_steps
         self.max_steps = max_steps
         self.grad_accum_steps = grad_accum_steps
         self.grad_clip = grad_clip
+        self.eval_interval = eval_interval
+        self.eval_steps = eval_steps
+        self.best_val_loss = float("inf")
         self.save_interval = save_interval
         self.checkpoint_dir = Path(checkpoint_dir)
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -118,6 +125,7 @@ class SparrowTrainer:
             MofNCompleteColumn(),
             TimeRemainingColumn(),
             TextColumn("[green]loss: {task.fields[loss]:.4f}"),
+            TextColumn("[blue]val: {task.fields[val]}"),
             TextColumn("[magenta]aux: {task.fields[aux]:.4f}"),
             TextColumn("[cyan]lr: {task.fields[lr]:.1e}"),
             TextColumn("[yellow]vram: {task.fields[vram]}"),
@@ -129,6 +137,7 @@ class SparrowTrainer:
                 "Training Sparrow MoE",
                 total=self.max_steps,
                 loss=0.0,
+                val="N/A",
                 aux=0.0,
                 lr=0.0,
                 vram="0MB",
@@ -136,6 +145,7 @@ class SparrowTrainer:
 
             start_time = time.time()
             total_tokens = 0
+            curr_val_str = "N/A"
 
             while step < self.max_steps:
                 self.optimizer.zero_grad(set_to_none=True)
@@ -192,13 +202,50 @@ class SparrowTrainer:
                     task,
                     advance=1,
                     loss=running_loss,
+                    val=curr_val_str,
                     aux=running_aux_loss,
                     lr=curr_lr,
                     vram=vram_str,
                 )
 
+                # Validation evaluation and overfitting monitoring
+                if self.val_dataloader is not None and step % self.eval_interval == 0:
+                    val_loss, val_aux = self.evaluate()
+                    curr_val_str = f"{val_loss:.4f}"
+                    gap = val_loss - running_loss
+                    if gap > 0.5:
+                        gap_msg = f"[bold red]Δ={gap:+.4f} (Overfitting Alert)[/bold red]"
+                    elif gap > 0.2:
+                        gap_msg = f"[yellow]Δ={gap:+.4f} (Mild Gap)[/yellow]"
+                    else:
+                        gap_msg = f"[green]Δ={gap:+.4f} (Good Generalization)[/green]"
+
+                    is_best = ""
+                    if val_loss < self.best_val_loss:
+                        self.best_val_loss = val_loss
+                        is_best = " [bold green]★ Best[/bold green]"
+
+                    self.console.print(
+                        f"[dim]Step {step:05d}[/dim] │ "
+                        f"Train: [green]{running_loss:.4f}[/green] │ "
+                        f"Val: [bold blue]{val_loss:.4f}[/bold blue] │ "
+                        f"{gap_msg}{is_best}"
+                    )
+                    progress.update(task, val=curr_val_str)
+
                 if step % self.save_interval == 0:
                     self.save_checkpoint(step)
+
+        if self.val_dataloader is not None and step > 0 and step % self.eval_interval != 0:
+            val_loss, val_aux = self.evaluate()
+            gap = val_loss - running_loss
+            gap_msg = f"[bold red]Δ={gap:+.4f} (Overfitting Alert)[/bold red]" if gap > 0.5 else f"[green]Δ={gap:+.4f}[/green]"
+            self.console.print(
+                f"[dim]Final Step {step:05d}[/dim] │ "
+                f"Train: [green]{running_loss:.4f}[/green] │ "
+                f"Val: [bold blue]{val_loss:.4f}[/bold blue] │ "
+                f"{gap_msg}"
+            )
 
         if step > 0 and step % self.save_interval != 0:
             self.save_checkpoint(step)
@@ -208,6 +255,53 @@ class SparrowTrainer:
             f"[bold green]Training finished![/bold green] "
             f"Trained {self.max_steps} steps ({total_tokens / elapsed:.1f} tokens/s)."
         )
+
+    @torch.no_grad()
+    def evaluate(self) -> Tuple[float, float]:
+        """Evaluates model on validation data without gradients.
+
+        Returns:
+            Tuple of (mean_total_loss, mean_aux_loss).
+        """
+        if self.val_dataloader is None:
+            return 0.0, 0.0
+
+        self.model.eval()
+        total_loss = 0.0
+        total_aux = 0.0
+        num_batches = 0
+
+        val_iter = iter(self.val_dataloader)
+        for _ in range(self.eval_steps):
+            try:
+                x, y = next(val_iter)
+            except StopIteration:
+                val_iter = iter(self.val_dataloader)
+                try:
+                    x, y = next(val_iter)
+                except StopIteration:
+                    break
+
+            x = x.to(self.device, non_blocking=True)
+            y = y.to(self.device, non_blocking=True)
+
+            with torch.amp.autocast(
+                device_type=self.device.type,
+                dtype=self.precision_dtype,
+                enabled=self.use_amp,
+            ):
+                _, aux_loss, loss, _ = self.model(x, targets=y)
+
+            total_loss += loss.item()
+            total_aux += aux_loss.item()
+            num_batches += 1
+
+        self.model.train()
+
+        if num_batches == 0:
+            return 0.0, 0.0
+
+        return total_loss / num_batches, total_aux / num_batches
 
     def save_checkpoint(self, step: int) -> None:
         """Saves model weights and configuration atomically to a single file."""
