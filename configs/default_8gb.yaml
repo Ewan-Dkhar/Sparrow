@@ -36,9 +36,9 @@ training:
   beta2: 0.95
   grad_clip: 1.0
   warmup_steps: 200
-  max_steps: 10000
+  max_steps: 15000
   eval_interval: 250
-  save_interval: 1000
+  save_interval: 5000
   checkpoint_dir: "checkpoints"
 
 generation:
