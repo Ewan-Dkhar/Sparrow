@@ -1,0 +1,25 @@
+[project]
+name = "sparrow"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Ewan-Dkhar", email = "wanedarkh@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "einops>=0.8.2",
+    "numpy>=2.5.3",
+    "prompt-toolkit>=3.0.53",
+    "pyyaml>=6.0.3",
+    "rich>=15.0.0",
+    "tiktoken>=0.14.0",
+    "torch>=2.14.0",
+]
+
+[project.scripts]
+sparrow = "sparrow:main"
+
+[build-system]
+requires = ["uv_build>=0.12.9,<0.13.0"]
+build-backend = "uv_build"

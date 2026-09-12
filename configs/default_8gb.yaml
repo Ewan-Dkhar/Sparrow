@@ -1,0 +1,54 @@
+# Sparrow MoE Configuration tailored for NVIDIA GeForce RTX 4060 (8GB VRAM)
+# Architecture: ~150M parameter Sparse Mixture of Experts (MoE) decoder-only Transformer
+# Active parameters per token: ~35M (Top-2 routing across 8 experts)
+
+model:
+  name: "sparrow-moe-150m"
+  vocab_size: 50257          # GPT-2 / tiktoken BPE vocabulary size
+  d_model: 512               # Hidden dimension
+  n_layers: 8                # Number of Transformer blocks
+  n_heads: 8                 # Number of Query attention heads (head_dim = 64)
+  n_kv_heads: 4              # Number of Key/Value heads for Grouped-Query Attention (GQA)
+  head_dim: 64               # Dimension per attention head (d_model // n_heads)
+  d_ff: 1024                 # Intermediate dimension for each SwiGLU expert
+  n_experts: 8               # Total number of FFN experts per layer
+  top_k: 2                   # Number of active experts routed per token
+  max_seq_len: 2048          # Maximum context window length
+  rope_theta: 10000.0        # RoPE base frequency
+  rms_norm_eps: 1.0e-6       # RMSNorm numerical stability epsilon
+  router_noise_mult: 1.0     # Multiplier for Gaussian noise in router during training
+  aux_loss_coef: 0.01        # Coefficient for auxiliary load-balancing loss
+  tie_word_embeddings: true  # Share weights between input embedding and lm_head to conserve VRAM
+
+hardware:
+  device: "cuda"             # Target device ("cuda" or "cpu")
+  precision: "bfloat16"      # "bfloat16" or "float16" (RTX 4060 supports native BF16)
+  use_flash_attn: true       # Use PyTorch SDPA FlashAttention-2 backend
+  compile: false             # Optional torch.compile (disabled by default for interactive CLI)
+
+training:
+  batch_size: 4              # Per-device micro-batch size fitting into 8GB VRAM
+  gradient_accumulation_steps: 8  # Effective batch size = 32
+  learning_rate: 3.0e-4
+  min_learning_rate: 3.0e-5
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+  warmup_steps: 200
+  max_steps: 10000
+  eval_interval: 250
+  save_interval: 1000
+  checkpoint_dir: "checkpoints"
+
+generation:
+  max_new_tokens: 512
+  temperature: 0.7
+  top_k: 50
+  top_p: 0.9
+  repetition_penalty: 1.1
+
+cli:
+  system_prompt: "You are Sparrow, a lightweight, modern sparse Mixture of Experts (MoE) assistant running locally on an RTX 4060."
+  theme: "monokai"
+  stream_speed: 0.01         # Delay in seconds for smooth CLI streaming effect
